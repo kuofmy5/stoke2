@@ -192,7 +192,9 @@
 <body>
 <main>
   <h1>台股籌碼與營收儀表板</h1>
-  <div class="muted">市場籌碼趨勢｜自選股法人買賣｜融資餘額｜個股月營收｜台指期空單</div>
+  <div class="muted">
+    市場籌碼趨勢｜大盤與櫃買指數｜自選股法人買賣｜融資餘額｜月營收｜台指期空單
+  </div>
 
  
 
@@ -216,6 +218,34 @@
 
  
 
+  <!-- 大盤與櫃買指數 -->
+  <section class="grid">
+    <article class="panel">
+      <h2>近半年台灣加權股價指數趨勢</h2>
+      <div id="taiexNote" class="muted">
+        證交所每日收盤指數與 5 日／10 日／月線（20 日）
+      </div>
+      <div class="chart-box">
+        <canvas id="taiexChart"></canvas>
+      </div>
+    </article>
+
+ 
+
+    <article class="panel">
+      <h2>近半年櫃買報酬指數趨勢</h2>
+      <div id="otcNote" class="muted">
+        每日指數值與 5 日／10 日／月線（20 日）
+      </div>
+      <div class="chart-box">
+        <canvas id="otcChart"></canvas>
+      </div>
+    </article>
+  </section>
+
+ 
+
+  <!-- 市場籌碼與期貨 -->
   <section class="grid">
     <article class="panel">
       <h2>近兩個月融資餘額</h2>
@@ -257,10 +287,12 @@
 
  
 
+  <!-- 自選股 -->
   <section class="panel">
     <h2>自選股票（最多 20 檔）</h2>
     <div class="muted">
-      輸入股票代碼後按「刷新資料」。個股法人買賣超以張顯示，融資餘額以張顯示，月營收以億元顯示。
+      個股法人買賣超以張顯示、融資餘額以張顯示、月營收以億元顯示。
+      個股收盤價附 5 日、10 日及 20 日均線。EPS 與毛利率為近兩年季度資料。
     </div>
 
  
@@ -305,6 +337,7 @@ const sixMonthsAgo = monthsAgo(6);
 const twoMonthsAgo = monthsAgo(2);
 const oneMonthAgo = monthsAgo(1);
 const oneYearAgo = monthsAgo(12);
+const twoYearsAgo = monthsAgo(24);
 
  
 
@@ -333,13 +366,23 @@ for (let i = 1; i <= 20; i++) {
 
  
 
+ 
+
 /* 從 FinMind API 取得資料 */
 async function fetchDataset(dataset, startDate, finishDate, dataId = "") {
-  const params = new URLSearchParams({
-    dataset,
-    start_date: startDate,
-    end_date: finishDate
-  });
+  const params = new URLSearchParams({ dataset });
+
+ 
+
+  if (startDate) {
+    params.set("start_date", startDate);
+  }
+
+ 
+
+  if (finishDate) {
+    params.set("end_date", finishDate);
+  }
 
  
 
@@ -424,6 +467,94 @@ function sortedByDate(rows) {
 
  
 
+ 
+
+/* 計算 N 個交易日簡單移動平均 */
+function calculateMovingAverage(rows, period, getValue) {
+  return rows.map((_, index) => {
+    if (index + 1 < period) {
+      return null;
+    }
+
+ 
+
+    const windowRows = rows.slice(index + 1 - period, index + 1);
+    const values = windowRows.map(getValue);
+
+ 
+
+    if (values.some(value => !Number.isFinite(value))) {
+      return null;
+    }
+
+ 
+
+    return values.reduce((sum, value) => sum + value, 0) / period;
+  });
+}
+
+ 
+
+ 
+
+/* 繪製收盤價及 5、10、20 日均線 */
+function createPriceMaChart(canvasId, rows, label, unit = "元") {
+  const validRows = sortedByDate(rows).filter(row => {
+    const close = Number(row.close);
+    return row.date && Number.isFinite(close) && close > 0;
+  });
+
+ 
+
+  if (validRows.length === 0) {
+    createEmptyChart(canvasId, "沒有可用的收盤資料");
+    return;
+  }
+
+ 
+
+  const getClose = row => Number(row.close);
+  const closes = validRows.map(getClose);
+
+ 
+
+  createLineChart(
+    canvasId,
+    validRows.map(row => row.date),
+    [
+      {
+        label,
+        data: closes,
+        color: "#f472b6",
+        unit
+      },
+      {
+        label: "5 日線",
+        data: calculateMovingAverage(validRows, 5, getClose),
+        color: "#55d6a2",
+        unit
+      },
+      {
+        label: "10 日線",
+        data: calculateMovingAverage(validRows, 10, getClose),
+        color: "#7aa7ff",
+        unit
+      },
+      {
+        label: "月線（20 日）",
+        data: calculateMovingAverage(validRows, 20, getClose),
+        color: "#ffb86b",
+        unit
+      }
+    ],
+    unit
+  );
+}
+
+ 
+
+ 
+
 /* 按欄位名稱尋找資料；找不到會回傳 null */
 function findField(row, patterns) {
   if (!row) return null;
@@ -448,6 +579,8 @@ function findField(row, patterns) {
 
   return null;
 }
+
+ 
 
  
 
@@ -494,8 +627,16 @@ function getTodayBalance(row) {
 
  
 
-/* 建立折線圖 */
-function createLineChart(canvasId, labels, datasets, unitLabel) {
+ 
+
+/* 建立折線圖或混合圖 */
+function createLineChart(
+  canvasId,
+  labels,
+  datasets,
+  unitLabel,
+  chartOptions = {}
+) {
   if (chartInstances[canvasId]) {
     chartInstances[canvasId].destroy();
   }
@@ -503,7 +644,7 @@ function createLineChart(canvasId, labels, datasets, unitLabel) {
  
 
   chartInstances[canvasId] = new Chart($(canvasId), {
-    type: "line",
+    type: chartOptions.chartType || "line",
 
  
 
@@ -511,12 +652,18 @@ function createLineChart(canvasId, labels, datasets, unitLabel) {
       labels,
       datasets: datasets.map((dataset, index) => ({
         ...dataset,
+        ...(dataset.type ? { type: dataset.type } : {}),
+        yAxisID: dataset.yAxisID || "y",
         borderColor: dataset.color ||
           ["#55d6a2", "#7aa7ff", "#ffb86b", "#e879f9"][index % 4],
-        backgroundColor: "transparent",
-        borderWidth: 2,
+        backgroundColor: dataset.backgroundColor ||
+          (dataset.type === "bar"
+            ? "rgba(85, 214, 162, 0.65)"
+            : "transparent"),
+        borderWidth: dataset.type === "bar" ? 1 : 2,
         tension: 0.25,
-        pointRadius: 2
+        pointRadius: dataset.type === "line" ? 3 : 0,
+        spanGaps: false
       }))
     },
 
@@ -546,10 +693,18 @@ function createLineChart(canvasId, labels, datasets, unitLabel) {
 
         tooltip: {
           callbacks: {
-            label: context =>
-              `${context.dataset.label}: ${
-                Number(context.raw).toLocaleString()
-              } ${unitLabel}`
+            label: context => {
+              const datasetUnit = context.dataset.unit ?? unitLabel;
+              const value = context.raw;
+
+ 
+
+              return `${context.dataset.label}: ${
+                value === null || value === undefined
+                  ? "無資料"
+                  : Number(value).toLocaleString()
+              } ${datasetUnit}`;
+            }
           }
         }
       },
@@ -560,7 +715,7 @@ function createLineChart(canvasId, labels, datasets, unitLabel) {
         x: {
           ticks: {
             color: "#9aa9bf",
-            maxTicksLimit: 9
+            maxTicksLimit: 12
           },
           grid: {
             color: "#23314a"
@@ -570,9 +725,11 @@ function createLineChart(canvasId, labels, datasets, unitLabel) {
  
 
         y: {
+          type: "linear",
+          position: "left",
           title: {
-            display: Boolean(unitLabel),
-            text: unitLabel,
+            display: Boolean(chartOptions.yAxisTitle || unitLabel),
+            text: chartOptions.yAxisTitle || unitLabel,
             color: "#9aa9bf"
           },
           ticks: {
@@ -581,7 +738,27 @@ function createLineChart(canvasId, labels, datasets, unitLabel) {
           grid: {
             color: "#23314a"
           }
-        }
+        },
+
+ 
+
+        ...(chartOptions.secondaryAxis ? {
+          y1: {
+            type: "linear",
+            position: "right",
+            title: {
+              display: true,
+              text: chartOptions.secondaryAxis.title,
+              color: "#9aa9bf"
+            },
+            ticks: {
+              color: "#9aa9bf"
+            },
+            grid: {
+              drawOnChartArea: false
+            }
+          }
+        } : {})
       }
     }
   });
@@ -601,6 +778,8 @@ function createEmptyChart(canvasId, message) {
     ""
   );
 }
+
+ 
 
  
 
@@ -651,6 +830,299 @@ function isShortRow(row) {
   return name.includes("融券") ||
     name.includes("shortsale");
 }
+
+ 
+
+ 
+
+/* 從證交所取得近半年發行量加權股價指數每日資料 */
+async function fetchTaiexDailyRows() {
+  const [startYear, startMonth] = sixMonthsAgo
+    .split("-")
+    .map(Number);
+
+ 
+
+  const [endYear, endMonth] = endDate
+    .split("-")
+    .map(Number);
+
+ 
+
+  const months = [];
+  const cursor = new Date(startYear, startMonth - 1, 1);
+  const lastMonth = new Date(endYear, endMonth - 1, 1);
+
+ 
+
+  while (cursor <= lastMonth) {
+    months.push({
+      year: cursor.getFullYear(),
+      month: cursor.getMonth() + 1
+    });
+
+ 
+
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+ 
+
+  const monthlyRows = await Promise.all(
+    months.map(async ({ year, month }) => {
+      const monthText = String(month).padStart(2, "0");
+      const queryDate = `${year}${monthText}01`;
+
+ 
+
+      const url =
+        "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST" +
+        `?date=${queryDate}&response=json`;
+
+ 
+
+      let response;
+
+ 
+
+      try {
+        response = await fetch(url, { cache: "no-store" });
+      } catch {
+        throw new Error(
+          "無法連線證交所指數 API。請確認網路連線，或稍後再試。"
+        );
+      }
+
+ 
+
+      if (!response.ok) {
+        throw new Error(`證交所 API HTTP ${response.status}`);
+      }
+
+ 
+
+      let result;
+
+ 
+
+      try {
+        result = await response.json();
+      } catch {
+        throw new Error("證交所 API 回傳的內容不是有效 JSON。");
+      }
+
+ 
+
+      if (result.stat !== "OK" || !Array.isArray(result.data)) {
+        throw new Error(
+          result.stat || `${year}-${monthText} 指數資料格式不正確。`
+        );
+      }
+
+ 
+
+      return result.data.map(columns => {
+        const rocDate = String(columns[0] || "");
+        const [rocYear, dateMonth, day] = rocDate
+          .split("/")
+          .map(Number);
+
+ 
+
+        if (!rocYear || !dateMonth || !day) {
+          return null;
+        }
+
+ 
+
+        const date =
+          `${rocYear + 1911}-` +
+          `${String(dateMonth).padStart(2, "0")}-` +
+          `${String(day).padStart(2, "0")}`;
+
+ 
+
+        const close = Number(
+          String(columns[4] || "").replace(/,/g, "")
+        );
+
+ 
+
+        if (!Number.isFinite(close) || close <= 0) {
+          return null;
+        }
+
+ 
+
+        return { date, close };
+      });
+    })
+  );
+
+ 
+
+  return monthlyRows
+    .flat()
+    .filter(row =>
+      row &&
+      row.date >= sixMonthsAgo &&
+      row.date <= endDate
+    )
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+
+
+/* 近半年加權指數與櫃買報酬指數及均線 */
+async function loadMarketIndexCharts() {
+  const [taiexResult, otcResult] = await Promise.allSettled([
+    fetchTaiexDailyRows(),
+
+ 
+
+    fetchDataset(
+      "TaiwanStockTotalReturnIndex",
+      sixMonthsAgo,
+      endDate,
+      "TPEx"
+    )
+  ]);
+
+ 
+
+  /* 大盤：證交所發行量加權股價指數（日資料） */
+  if (taiexResult.status === "fulfilled" && taiexResult.value.length > 0) {
+    createPriceMaChart(
+      "taiexChart",
+      taiexResult.value,
+      "發行量加權股價指數",
+      "點"
+    );
+
+ 
+
+    $("taiexNote").textContent =
+      "資料來源：證交所每日收盤指數｜含 5 日／10 日／月線（20 日）";
+  } else {
+    const message = taiexResult.status === "rejected"
+      ? taiexResult.reason.message
+      : "證交所 API 沒有回傳近半年加權指數資料。";
+
+ 
+
+    createEmptyChart("taiexChart", "加權指數資料讀取失敗");
+    $("taiexNote").textContent = `讀取失敗：${message}`;
+    console.error("加權指數讀取失敗：", message);
+  }
+
+ 
+
+  /* 櫃買：保留 FinMind 日頻櫃買報酬指數 */
+  if (otcResult.status === "fulfilled") {
+    const otcData = otcResult.value;
+
+ 
+
+    function getIndexValue(row) {
+      if (!row) return null;
+
+ 
+
+      const preferredKeys = [
+        "close",
+        "value",
+        "index",
+        "price"
+      ];
+
+ 
+
+      for (const preferredKey of preferredKeys) {
+        const key = Object.keys(row).find(
+          name => name.toLowerCase() === preferredKey
+        );
+
+ 
+
+        if (key !== undefined) {
+          const value = Number(row[key]);
+
+ 
+
+          if (Number.isFinite(value) && value > 0) {
+            return value;
+          }
+        }
+      }
+
+ 
+
+      const numericKey = Object.keys(row).find(key => {
+        if (/date|id|change|percent|rate|volume|type|name/i.test(key)) {
+          return false;
+        }
+
+ 
+
+        const value = Number(row[key]);
+        return Number.isFinite(value) && value > 0;
+      });
+
+ 
+
+      return numericKey ? Number(row[numericKey]) : null;
+    }
+
+ 
+
+    const otcRows = sortedByDate(
+      otcData
+        .map(row => ({
+          date: String(row.date || "").slice(0, 10),
+          close: getIndexValue(row)
+        }))
+        .filter(row =>
+          row.date &&
+          Number.isFinite(row.close) &&
+          row.close > 0
+        )
+    );
+
+ 
+
+    if (otcRows.length > 0) {
+      createPriceMaChart(
+        "otcChart",
+        otcRows,
+        "櫃買報酬指數",
+        "點"
+      );
+
+ 
+
+      $("otcNote").textContent =
+        "FinMind 日頻報酬指數｜含 5 日／10 日／月線（20 日）";
+    } else {
+      createEmptyChart("otcChart", "找不到櫃買報酬指數資料");
+
+ 
+
+      $("otcNote").textContent = otcData.length > 0
+        ? `資料欄位無法辨識：${Object.keys(otcData[0]).join(", ")}`
+        : "FinMind API 回傳 0 筆櫃買指數資料。";
+    }
+  } else {
+    const message = otcResult.reason.message;
+
+ 
+
+    createEmptyChart("otcChart", "櫃買指數資料讀取失敗");
+    $("otcNote").textContent = `讀取失敗：${message}`;
+    console.error("櫃買指數讀取失敗：", message);
+  }
+}
+
+ 
 
  
 
@@ -726,6 +1198,8 @@ async function loadMarketCharts() {
     }],
     "API 原始單位"
   );
+
+ 
 
  
 
@@ -883,6 +1357,8 @@ async function loadMarketCharts() {
 
  
 
+ 
+
 /* 台指期 TX 三大法人空單未平倉口數趨勢 */
 async function loadFuturesShortChart() {
   try {
@@ -963,9 +1439,6 @@ async function loadFuturesShortChart() {
 
       const exactKey = keys.find(key => {
         const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-
- 
-
         return normalized === "shortopeninterestbalancevolume";
       });
 
@@ -990,13 +1463,7 @@ async function loadFuturesShortChart() {
 
  
 
-      if (fallbackKey) {
-        return toNumber(row[fallbackKey]);
-      }
-
- 
-
-      return null;
+      return fallbackKey ? toNumber(row[fallbackKey]) : null;
     }
 
  
@@ -1109,6 +1576,8 @@ async function loadFuturesShortChart() {
 
  
 
+ 
+
 /* 判斷個股法人類型 */
 function getInvestorType(name) {
   const value = String(name || "");
@@ -1127,6 +1596,8 @@ function getInvestorType(name) {
 
  
 
+ 
+
 /* 讀取個股融資餘額欄位 */
 function getStockMarginBalance(row) {
   if (!row) return null;
@@ -1139,9 +1610,6 @@ function getStockMarginBalance(row) {
 
   const exactKey = keys.find(key => {
     const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-
- 
-
     return normalized === "marginpurchasetodaybalance";
   });
 
@@ -1176,56 +1644,68 @@ function getStockMarginBalance(row) {
 
  
 
-  if (chineseKey) {
-    return toNumber(row[chineseKey]);
-  }
-
- 
-
-  return null;
+  return chineseKey ? toNumber(row[chineseKey]) : null;
 }
 
  
 
-/* 讀取一檔個股的法人買賣、月營收及融資餘額 */
+ 
+
+/* 讀取一檔個股的法人買賣、月營收、融資、股價及財報 */
 async function loadOneStock(code) {
-  const [institutionRows, revenueRows, marginRows, priceRows] =
-    await Promise.all([
-      fetchDataset(
-        "TaiwanStockInstitutionalInvestorsBuySell",
-        oneMonthAgo,
-        endDate,
-        code
-      ),
+  const [
+    institutionRows,
+    revenueRows,
+    marginRows,
+    priceRows,
+    financialRows
+  ] = await Promise.all([
+    fetchDataset(
+      "TaiwanStockInstitutionalInvestorsBuySell",
+      oneMonthAgo,
+      endDate,
+      code
+    ),
 
  
 
-      fetchDataset(
-        "TaiwanStockMonthRevenue",
-        oneYearAgo,
-        endDate,
-        code
-      ),
+    fetchDataset(
+      "TaiwanStockMonthRevenue",
+      oneYearAgo,
+      endDate,
+      code
+    ),
 
  
 
-      fetchDataset(
-        "TaiwanStockMarginPurchaseShortSale",
-        twoMonthsAgo,
-        endDate,
-        code
-      ),
+    fetchDataset(
+      "TaiwanStockMarginPurchaseShortSale",
+      twoMonthsAgo,
+      endDate,
+      code
+    ),
 
  
 
-      // 近半年每日股價
-      fetchDataset(
-        "TaiwanStockPrice",
-        sixMonthsAgo,
-        endDate,
-        code
-      )
-    ]);
+    fetchDataset(
+      "TaiwanStockPrice",
+      sixMonthsAgo,
+      endDate,
+      code
+    ),
+
+ 
+
+    fetchDataset(
+      "TaiwanStockFinancialStatements",
+      twoYearsAgo,
+      endDate,
+      code
+    ).catch(error => {
+      console.warn(`${code} 讀取財報資料失敗：`, error);
+      return [];
+    })
+  ]);
 
  
 
@@ -1291,7 +1771,6 @@ async function loadOneStock(code) {
 
  
 
-    // 股數換算成張數
     byDate[row.date][category] += netShares / 1000;
   }
 
@@ -1324,8 +1803,44 @@ async function loadOneStock(code) {
     byDate,
     revenues: sortedByDate(revenueRows),
     marginData,
-    prices
+    prices,
+    financialRows
   };
+}
+
+ 
+
+ 
+
+/* 取得股票代碼與公司名稱對照 */
+async function loadStockNameMap() {
+  const rows = await fetchDataset("TaiwanStockInfo");
+  const latestByCode = new Map();
+
+ 
+
+  for (const row of rows) {
+    if (!row.stock_id || !row.stock_name) continue;
+
+ 
+
+    const previous = latestByCode.get(row.stock_id);
+
+ 
+
+    if (!previous || String(row.date) > String(previous.date)) {
+      latestByCode.set(row.stock_id, row);
+    }
+  }
+
+ 
+
+  return new Map(
+    [...latestByCode].map(([code, row]) => [
+      code,
+      row.stock_name
+    ])
+  );
 }
 
  
@@ -1334,18 +1849,20 @@ async function loadOneStock(code) {
 
 function destroyStockCharts() {
   for (const id of Object.keys(chartInstances)) {
-if (
-  id.startsWith("inst-") ||
-  id.startsWith("margin-stock-") ||
-  id.startsWith("revenue-") ||
-  id.startsWith("price-")
-)
-{
+    if (
+      id.startsWith("inst-") ||
+      id.startsWith("margin-stock-") ||
+      id.startsWith("revenue-") ||
+      id.startsWith("price-") ||
+      id.startsWith("financial-trend-")
+    ) {
       chartInstances[id].destroy();
       delete chartInstances[id];
     }
   }
 }
+
+ 
 
  
 
@@ -1375,12 +1892,27 @@ async function loadStockCharts() {
 
  
 
+  let stockNameMap = new Map();
+
+ 
+
+  try {
+    stockNameMap = await loadStockNameMap();
+  } catch (error) {
+    console.warn(
+      "讀取股票名稱失敗，將只顯示股票代碼：",
+      error
+    );
+  }
+
+ 
+
   const results = [];
   let nextIndex = 0;
 
  
 
-  // 同時最多處理 4 檔，降低同時發出的 API 請求數
+  /* 同時最多處理 4 檔，降低 API 請求數 */
   async function worker() {
     while (nextIndex < codes.length) {
       const code = codes[nextIndex++];
@@ -1423,7 +1955,16 @@ async function loadStockCharts() {
  
 
     const heading = document.createElement("h2");
-    heading.textContent = item.code;
+    const stockName = stockNameMap.get(item.code);
+
+ 
+
+    heading.textContent = stockName
+      ? `${item.code}｜${stockName}`
+      : item.code;
+
+ 
+
     card.appendChild(heading);
 
  
@@ -1441,29 +1982,35 @@ async function loadStockCharts() {
 
     const chartsBox = document.createElement("div");
     chartsBox.className = "stock-charts";
-/* 個股近半年每日收盤價圖 */
-const priceBlock = document.createElement("div");
 
  
 
-const priceLabel = document.createElement("div");
-priceLabel.className = "muted";
-priceLabel.textContent = "近半年每日收盤價";
+ 
+
+    /* 個股近半年每日收盤價及均線圖 */
+    const priceBlock = document.createElement("div");
 
  
 
-const priceChartBox = document.createElement("div");
-priceChartBox.className = "chart-box";
+    const priceLabel = document.createElement("div");
+    priceLabel.className = "muted";
+    priceLabel.textContent =
+      "近半年每日收盤價與 5 日／10 日／月線（20 日）";
 
  
 
-const priceCanvas = document.createElement("canvas");
-priceCanvas.id = `price-${item.code}`;
+    const priceChartBox = document.createElement("div");
+    priceChartBox.className = "chart-box";
 
  
 
-priceChartBox.appendChild(priceCanvas);
-priceBlock.append(priceLabel, priceChartBox);
+    const priceCanvas = document.createElement("canvas");
+    priceCanvas.id = `price-${item.code}`;
+
+ 
+
+    priceChartBox.appendChild(priceCanvas);
+    priceBlock.append(priceLabel, priceChartBox);
 
  
 
@@ -1495,6 +2042,8 @@ priceBlock.append(priceLabel, priceChartBox);
 
  
 
+ 
+
     /* 個股融資餘額圖 */
     const marginBlock = document.createElement("div");
 
@@ -1521,6 +2070,8 @@ priceBlock.append(priceLabel, priceChartBox);
 
  
 
+ 
+
     /* 個股月營收圖 */
     const revenueBlock = document.createElement("div");
 
@@ -1528,7 +2079,7 @@ priceBlock.append(priceLabel, priceChartBox);
 
     const revenueLabel = document.createElement("div");
     revenueLabel.className = "muted";
-    revenueLabel.textContent = "近一年月營收（億元）";
+    revenueLabel.textContent = "近一年月營收（億元）與月增率（%）";
 
  
 
@@ -1547,37 +2098,66 @@ priceBlock.append(priceLabel, priceChartBox);
 
  
 
-    chartsBox.append(
-  priceBlock,
-  investorBlock,
-  marginBlock,
-  revenueBlock
-);
+ 
+
+    /* EPS 與毛利率合併圖 */
+    const financialTrendBlock = document.createElement("div");
 
  
+
+    const financialTrendLabel = document.createElement("div");
+    financialTrendLabel.className = "muted";
+    financialTrendLabel.textContent =
+      "近兩年 EPS（柱狀／左軸）與毛利率（折線／右軸）";
+
+ 
+
+    const financialTrendChartBox = document.createElement("div");
+    financialTrendChartBox.className = "chart-box";
+
+ 
+
+    const financialTrendCanvas = document.createElement("canvas");
+    financialTrendCanvas.id = `financial-trend-${item.code}`;
+
+ 
+
+    financialTrendChartBox.appendChild(financialTrendCanvas);
+    financialTrendBlock.append(
+      financialTrendLabel,
+      financialTrendChartBox
+    );
+
+ 
+
+ 
+
+    chartsBox.append(
+      priceBlock,
+      investorBlock,
+      marginBlock,
+      revenueBlock,
+      financialTrendBlock
+    );
 
  
 
     card.appendChild(chartsBox);
     $("stockResults").appendChild(card);
-/* 畫近半年每日收盤價 */
-if (item.prices.length > 0) {
-  createLineChart(
-    priceCanvas.id,
-    item.prices.map(row => row.date),
-    [{
-      label: "每日收盤價",
-      data: item.prices.map(row => toNumber(row.close)),
-      color: "#f472b6"
-    }],
-    "元"
-  );
-} else {
-  createEmptyChart(
-    priceCanvas.id,
-    "沒有每日股價資料"
-  );
-}
+
+ 
+
+ 
+
+    /* 個股收盤價、5 日線、10 日線、20 日月線 */
+    createPriceMaChart(
+      priceCanvas.id,
+      item.prices,
+      "每日收盤價",
+      "元"
+    );
+
+ 
 
  
 
@@ -1592,6 +2172,8 @@ if (item.prices.length > 0) {
       })),
       "張"
     );
+
+ 
 
  
 
@@ -1614,9 +2196,7 @@ if (item.prices.length > 0) {
       );
     }
 
- 
-
-    /* 畫個股月營收 */
+    /* 整理近一年月營收 */
     const firstRevenue = item.revenues[0] || {};
 
  
@@ -1629,17 +2209,92 @@ if (item.prices.length > 0) {
  
 
     if (revenueKey) {
+      const revenueRows = sortedByDate(item.revenues);
+
+ 
+
+      const revenueByMonth = new Map(
+        revenueRows.map(row => [
+          String(row.date).slice(0, 7),
+          toNumber(row[revenueKey])
+        ])
+      );
+
+ 
+
+      const revenueGrowth = revenueRows.map(row => {
+        const currentMonth = String(row.date).slice(0, 7);
+        const [year, month] = currentMonth.split("-").map(Number);
+
+ 
+
+        if (!year || !month) {
+          return null;
+        }
+
+ 
+
+        const previousDate = new Date(
+          Date.UTC(year, month - 2, 1)
+        );
+
+ 
+
+        const previousMonth =
+          `${previousDate.getUTCFullYear()}-${
+            String(previousDate.getUTCMonth() + 1).padStart(2, "0")
+          }`;
+
+ 
+
+        const currentRevenue = revenueByMonth.get(currentMonth);
+        const previousRevenue = revenueByMonth.get(previousMonth);
+
+ 
+
+        if (
+          currentRevenue === undefined ||
+          previousRevenue === undefined ||
+          previousRevenue === 0
+        ) {
+          return null;
+        }
+
+ 
+
+        return ((currentRevenue / previousRevenue) - 1) * 100;
+      });
+
+ 
+
       createLineChart(
         revenueCanvas.id,
-        item.revenues.map(row => row.date),
-        [{
-          label: "月營收",
-          data: item.revenues.map(
-            row => toNumber(row[revenueKey]) / 100000000
-          ),
-          color: "#e879f9"
-        }],
-        "億元"
+        revenueRows.map(row => row.date),
+        [
+          {
+            label: "月營收",
+            data: revenueRows.map(
+              row => toNumber(row[revenueKey]) / 100000000
+            ),
+            color: "#e879f9",
+            unit: "億元",
+            yAxisID: "y"
+          },
+          {
+            label: "月增率",
+            data: revenueGrowth,
+            color: "#ffb86b",
+            unit: "%",
+            yAxisID: "y1"
+          }
+        ],
+        "億元",
+        {
+          yAxisTitle: "月營收（億元）",
+          secondaryAxis: {
+            title: "月增率（%）"
+          }
+        }
       );
     } else {
       createEmptyChart(
@@ -1654,8 +2309,134 @@ if (item.prices.length > 0) {
         Object.keys(firstRevenue)
       );
     }
+
+ 
+
+ 
+
+    /* 整理近兩年財報資料 */
+    const financialByDate = {};
+
+ 
+
+    for (const row of item.financialRows || []) {
+      if (!row.date || !row.type) continue;
+
+ 
+
+      const value = Number(row.value);
+      if (!Number.isFinite(value)) continue;
+
+ 
+
+      if (!financialByDate[row.date]) {
+        financialByDate[row.date] = {};
+      }
+
+ 
+
+      const type = String(row.type).toLowerCase();
+
+ 
+
+      if (type === "eps") {
+        financialByDate[row.date].eps = value;
+      } else if (type === "grossprofit") {
+        financialByDate[row.date].grossProfit = value;
+      } else if (type === "revenue") {
+        financialByDate[row.date].revenue = value;
+      }
+    }
+
+ 
+
+    const financialDates = Object.keys(financialByDate).sort();
+
+ 
+
+    const trendDates = financialDates.filter(date => {
+      const row = financialByDate[date];
+
+ 
+
+      const hasEps = row.eps !== undefined;
+
+ 
+
+      const hasGrossMargin =
+        row.grossProfit !== undefined &&
+        row.revenue !== undefined &&
+        row.revenue !== 0;
+
+ 
+
+      return hasEps || hasGrossMargin;
+    });
+
+ 
+
+    if (trendDates.length > 0) {
+      createLineChart(
+        financialTrendCanvas.id,
+        trendDates,
+        [
+          {
+            type: "bar",
+            label: "EPS",
+            data: trendDates.map(date =>
+              financialByDate[date].eps ?? null
+            ),
+            color: "#55d6a2",
+            backgroundColor: "rgba(85, 214, 162, 0.65)",
+            unit: "元／股",
+            yAxisID: "y",
+            order: 2
+          },
+          {
+            type: "line",
+            label: "毛利率",
+            data: trendDates.map(date => {
+              const row = financialByDate[date];
+
+ 
+
+              if (
+                row.grossProfit === undefined ||
+                row.revenue === undefined ||
+                row.revenue === 0
+              ) {
+                return null;
+              }
+
+ 
+
+              return (row.grossProfit / row.revenue) * 100;
+            }),
+            color: "#ffb86b",
+            unit: "%",
+            yAxisID: "y1",
+            order: 1
+          }
+        ],
+        "元／股",
+        {
+          chartType: "bar",
+          yAxisTitle: "EPS（元／股）",
+          secondaryAxis: {
+            title: "毛利率（%）"
+          }
+        }
+      );
+    } else {
+      createEmptyChart(
+        financialTrendCanvas.id,
+        "近兩年沒有足夠的 EPS／毛利率資料"
+      );
+    }
   }
 }
+
+ 
 
  
 
@@ -1667,6 +2448,7 @@ $("refresh").addEventListener("click", async () => {
  
 
   try {
+    await loadMarketIndexCharts();
     await loadFuturesShortChart();
     await loadMarketCharts();
     await loadStockCharts();
@@ -1689,3 +2471,5 @@ $("refresh").addEventListener("click", async () => {
 </script>
 </body>
 </html>
+
+
