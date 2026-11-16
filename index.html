@@ -1,0 +1,307 @@
+```html
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TDCC 大戶持股比例</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #f5f7fb;
+      color: #172033;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+
+ 
+
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+ 
+
+    .card {
+      padding: 22px;
+      background: white;
+      border: 1px solid #e5e9f0;
+      border-radius: 14px;
+      box-shadow: 0 4px 18px #1720330a;
+    }
+
+ 
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin: 16px 0;
+    }
+
+ 
+
+    select {
+      padding: 8px 12px;
+      font-size: 16px;
+    }
+
+ 
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 360px;
+    }
+
+ 
+
+    #status {
+      color: #5b6475;
+      line-height: 1.6;
+    }
+
+ 
+
+    .note {
+      color: #5b6475;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <section class="card">
+    <h1>TDCC 大戶持股比例</h1>
+
+ 
+
+    <div class="toolbar">
+      <label for="stock">股票代號：</label>
+      <select id="stock"></select>
+    </div>
+
+ 
+
+    <canvas id="chart" aria-label="大戶持股比例折線圖"></canvas>
+    <p id="status">正在讀取資料……</p>
+    <p class="note">
+      大戶定義：持股分級第 12～16 級，合計為 400,001 股以上。
+      資料來源：TDCC 集保戶股權分散表。
+    </p>
+  </section>
+</main>
+
+ 
+
+<script>
+const dataUrl = `./data/tdcc_history.json?t=${Date.now()}`;
+const select = document.getElementById("stock");
+const canvas = document.getElementById("chart");
+const statusEl = document.getElementById("status");
+
+ 
+
+let allRecords = [];
+
+ 
+
+async function start() {
+  try {
+    const response = await fetch(dataUrl, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`讀取資料失敗：HTTP ${response.status}`);
+    }
+
+ 
+
+    const data = await response.json();
+    allRecords = Array.isArray(data.records) ? data.records : [];
+
+ 
+
+    const codes = [...new Set(allRecords.map(r => r.stock_code))].sort();
+    if (codes.length === 0) {
+      statusEl.textContent =
+        "目前還沒有資料。請先到 GitHub Actions 手動執行 Update TDCC。";
+      return;
+    }
+
+ 
+
+    for (const code of codes) {
+      const option = document.createElement("option");
+      option.value = code;
+      option.textContent = code;
+      select.appendChild(option);
+    }
+
+ 
+
+    select.addEventListener("change", draw);
+    window.addEventListener("resize", draw);
+    draw();
+
+ 
+
+    const updated = data.updated_at_utc
+      ? new Date(data.updated_at_utc).toLocaleString()
+      : "未知";
+    statusEl.textContent += `；資料檔更新時間：${updated}`;
+  } catch (error) {
+    statusEl.textContent =
+      `無法載入資料：${error.message}。請確認 Actions 已成功執行，且 data/tdcc_history.json 已產生。`;
+  }
+}
+
+ 
+
+function draw() {
+  const code = select.value;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 183);
+
+ 
+
+  const rows = allRecords
+    .filter(r => r.stock_code === code && new Date(r.date) >= cutoff)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+ 
+
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(320, rect.width);
+  const height = 360;
+  const dpr = window.devicePixelRatio || 1;
+
+ 
+
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+
+ 
+
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, width, height);
+
+ 
+
+  if (rows.length === 0) {
+    statusEl.textContent = `${code} 目前沒有近半年資料。`;
+    return;
+  }
+
+ 
+
+  if (rows.length < 2) {
+    statusEl.textContent =
+      `${code} 目前只有 ${rows.length} 筆資料，累積更多週資料後才會形成趨勢線。`;
+  } else {
+    statusEl.textContent =
+      `${code}：${rows.length} 筆資料，最新資料日期 ${rows[rows.length - 1].date}。`;
+  }
+
+ 
+
+  const values = rows.map(r => Number(r.large_holder_percent));
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+
+ 
+
+  if (min === max) {
+    min -= 1;
+    max += 1;
+  } else {
+    const padding = (max - min) * 0.12;
+    min -= padding;
+    max += padding;
+  }
+
+ 
+
+  const left = 58, right = 18, top = 18, bottom = 42;
+  const chartWidth = width - left - right;
+  const chartHeight = height - top - bottom;
+
+ 
+
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+
+ 
+
+  // 水平格線和百分比刻度
+  for (let i = 0; i <= 4; i++) {
+    const y = top + (chartHeight * i / 4);
+    const value = max - ((max - min) * i / 4);
+
+ 
+
+    ctx.strokeStyle = "#e7ebf2";
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(width - right, y);
+    ctx.stroke();
+
+ 
+
+    ctx.fillStyle = "#687386";
+    ctx.fillText(`${value.toFixed(1)}%`, left - 8, y);
+  }
+
+ 
+
+  const points = rows.map((row, index) => ({
+    x: left + (rows.length === 1 ? chartWidth / 2 :
+      index * chartWidth / (rows.length - 1)),
+    y: top + (max - Number(row.large_holder_percent)) /
+      (max - min) * chartHeight
+  }));
+
+ 
+
+  ctx.strokeStyle = "#2563eb";
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
+  });
+  ctx.stroke();
+
+ 
+
+  // 首尾日期
+  ctx.fillStyle = "#687386";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(rows[0].date, left, height - bottom + 12);
+
+ 
+
+  ctx.textAlign = "right";
+  ctx.fillText(rows[rows.length - 1].date, width - right, height - bottom + 12);
+
+ 
+
+  // 最新值標記
+  const last = points[points.length - 1];
+  ctx.fillStyle = "#2563eb";
+  ctx.beginPath();
+  ctx.arc(last.x, last.y, 4, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+ 
+
+start();
+</script>
+</body>
+</html>
+```
