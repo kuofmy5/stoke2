@@ -1,0 +1,22 @@
+{
+  "source": "TDCC 集保戶股權分散表開放資料",
+  "threshold": "400,001 股以上（持股分級第 12～16 級）",
+  "updated_at_utc": "2026-11-16T04:03:16.296565+00:00",
+  "records": [
+    {
+      "date": "2026-11-13",
+      "stock_code": "2303",
+      "large_holder_percent": 68.71
+    },
+    {
+      "date": "2026-11-13",
+      "stock_code": "2330",
+      "large_holder_percent": 86.95
+    },
+    {
+      "date": "2026-11-13",
+      "stock_code": "2345",
+      "large_holder_percent": 70.23
+    }
+  ]
+}
